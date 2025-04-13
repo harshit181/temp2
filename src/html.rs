@@ -1,8 +1,8 @@
 //! HTML processing functions for Trafilatura Rust port.
 //! This module contains utilities for cleaning and normalizing HTML content.
 
-use kuchiki::traits::*;
-use kuchiki::{ElementData, NodeData, NodeRef};
+use kuchiki::traits::TendrilSink;
+use kuchiki::{NodeData, NodeRef};
 use regex::Regex;
 use lazy_static::lazy_static;
 
@@ -44,10 +44,9 @@ pub fn clean_html(document: &NodeRef, config: &ExtractionConfig) -> Result<NodeR
     for element_name in UNWANTED_ELEMENTS.iter() {
         let elements = document_clone.select(*element_name).unwrap();
         for element in elements {
-            if let Ok(node) = element.as_node().try_into_node_ref() {
-                if let Some(parent) = node.parent() {
-                    parent.children().remove_from_parent(&node);
-                }
+            let node = element.as_node();
+            if let Some(parent) = node.parent() {
+                node.detach();
             }
         }
     }
@@ -57,10 +56,9 @@ pub fn clean_html(document: &NodeRef, config: &ExtractionConfig) -> Result<NodeR
         let selector = format!("[class*='{}']", class_hint);
         let elements = document_clone.select(&selector).unwrap();
         for element in elements {
-            if let Ok(node) = element.as_node().try_into_node_ref() {
-                if let Some(parent) = node.parent() {
-                    parent.children().remove_from_parent(&node);
-                }
+            let node = element.as_node();
+            if let Some(_parent) = node.parent() {
+                node.detach();
             }
         }
     }
@@ -70,10 +68,9 @@ pub fn clean_html(document: &NodeRef, config: &ExtractionConfig) -> Result<NodeR
         let selector = format!("[id*='{}']", id_hint);
         let elements = document_clone.select(&selector).unwrap();
         for element in elements {
-            if let Ok(node) = element.as_node().try_into_node_ref() {
-                if let Some(parent) = node.parent() {
-                    parent.children().remove_from_parent(&node);
-                }
+            let node = element.as_node();
+            if let Some(_parent) = node.parent() {
+                node.detach();
             }
         }
     }
@@ -87,10 +84,9 @@ pub fn clean_html(document: &NodeRef, config: &ExtractionConfig) -> Result<NodeR
     if !config.include_tables {
         let table_elements = document_clone.select("table").unwrap();
         for element in table_elements {
-            if let Ok(node) = element.as_node().try_into_node_ref() {
-                if let Some(parent) = node.parent() {
-                    parent.children().remove_from_parent(&node);
-                }
+            let node = element.as_node();
+            if let Some(_parent) = node.parent() {
+                node.detach();
             }
         }
     }
@@ -117,8 +113,8 @@ fn remove_all_comments(node: &NodeRef) {
     
     // Now remove the comment nodes
     for node_to_remove in nodes_to_remove {
-        if let Some(parent) = node_to_remove.parent() {
-            parent.children().remove_from_parent(&node_to_remove);
+        if let Some(_parent) = node_to_remove.parent() {
+            node_to_remove.detach();
         }
     }
 }

@@ -11,9 +11,9 @@ pub mod metadata;
 pub mod readability;
 pub mod utils;
 
-use std::error::Error;
 use std::fs::File;
 use std::io::Read;
+use kuchiki::traits::TendrilSink;
 use std::path::Path;
 
 use reqwest::blocking::Client;

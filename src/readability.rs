@@ -74,7 +74,7 @@ pub fn extract_with_readability(document: &NodeRef, config: &ExtractionConfig) -
         let parent_node = parent.unwrap();
         
         // Add to candidates if not already there
-        if !candidates.iter().any(|(node, _)| node.address() == parent_node.address()) {
+        if !candidates.iter().any(|(node, _): &(NodeRef, f64)| node.address() == parent_node.address()) {
             let score = score_node(&parent_node);
             candidates.push((parent_node, score));
         }
@@ -113,7 +113,7 @@ fn prepare_document(document: &NodeRef) {
             let node = element.as_node();
             
             // Skip nodes that are certain elements we want to keep
-            if let Ok(element_data) = node.as_element() {
+            if let Some(element_data) = node.as_element() {
                 let name = element_data.name.local.to_string();
                 if ["html", "body", "article", "section", "main"].contains(&name.as_str()) {
                     continue;
@@ -121,7 +121,7 @@ fn prepare_document(document: &NodeRef) {
             }
             
             // Check attributes for unlikeliness
-            if let Ok(element_ref) = node.as_element() {
+            if let Some(element_ref) = node.as_element() {
                 let element = element_ref.attributes.borrow();
                 
                 if let Some(class) = element.get("class") {
@@ -143,8 +143,8 @@ fn prepare_document(document: &NodeRef) {
     
     // Remove the nodes
     for node in nodes_to_remove {
-        if let Some(parent) = node.parent() {
-            parent.children().remove_from_parent(&node);
+        if let Some(_parent) = node.parent() {
+            node.detach();
         }
     }
 }
@@ -155,8 +155,8 @@ fn score_node(node: &NodeRef) -> f64 {
     
     // Get the tag name
     let tag_name = match node.as_element() {
-        Ok(element) => element.name.local.to_string(),
-        Err(_) => return 0.0,
+        Some(element) => element.name.local.to_string(),
+        None => return 0.0,
     };
     
     // Adjust score based on tag
@@ -191,7 +191,7 @@ fn score_node(node: &NodeRef) -> f64 {
     
     // Adjust score based on link density
     let link_density = calculate_link_density(node);
-    score *= (1.0 - link_density);
+    score *= 1.0 - link_density;
     
     score
 }

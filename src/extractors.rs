@@ -227,7 +227,7 @@ fn score_node(node: &NodeRef, config: &ExtractionConfig) -> i32 {
     // Penalize for high link density
     let link_density = calculate_link_density(node);
     if link_density > *LINK_DENSITY_THRESHOLD {
-        score -= ((link_density * 100.0) as i32);
+        score -= (link_density * 100.0) as i32;
     }
     
     score

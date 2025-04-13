@@ -47,7 +47,8 @@ pub fn extract_metadata(document: &NodeRef, mut result: ExtractionResult) -> Res
 fn extract_title(document: &NodeRef) -> Option<String> {
     // Try Open Graph title
     if let Ok(og_title) = document.select_first("meta[property='og:title']") {
-        if let Ok(element) = og_title.as_element() {
+        let node = og_title.as_node();
+        if let Some(element) = node.as_element() {
             let attributes = element.attributes.borrow();
             if let Some(content) = attributes.get("content") {
                 if !content.is_empty() {
@@ -59,7 +60,8 @@ fn extract_title(document: &NodeRef) -> Option<String> {
     
     // Try Twitter title
     if let Ok(twitter_title) = document.select_first("meta[name='twitter:title']") {
-        if let Ok(element) = twitter_title.as_element() {
+        let node = twitter_title.as_node();
+        if let Some(element) = node.as_element() {
             let attributes = element.attributes.borrow();
             if let Some(content) = attributes.get("content") {
                 if !content.is_empty() {
