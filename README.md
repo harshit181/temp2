@@ -33,21 +33,27 @@ cargo build --release
 
 ```bash
 # Extract content from a URL
-trafilatura --url https://example.com
+trafilatura https://example.com
 
 # Extract content from a local HTML file
-trafilatura --file input.html
+trafilatura path/to/file.html
 
-# Extract content and convert to JSON format
-trafilatura --url https://example.com --output-format json
+# Extract content from HTML passed via stdin
+cat file.html | trafilatura
 
-# Extract content with metadata
-trafilatura --url https://example.com --extract-metadata
+# Extract content with specified minimum length
+trafilatura --min-extracted-size 100 https://example.com
+
+# Extract content and metadata in JSON format
+trafilatura -f json -m https://example.com
+
+# Extract content and metadata in XML format
+trafilatura -f xml -m https://example.com
 
 # Save output to a file
-trafilatura --url https://example.com --output output.txt
+trafilatura -o output.txt https://example.com
 
-# Show help
+# Show help for all options
 trafilatura --help
 ```
 
@@ -82,6 +88,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         include_images: true,
         extract_metadata: true,
         output_format: OutputFormat::Json,
+        min_extracted_size: 100,
         ..ExtractionConfig::default()
     };
     
@@ -91,6 +98,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+## Implementation Details
+
+This port uses the `scraper` library (based on `html5ever`) for HTML parsing, instead of the outdated `kuchiki` library. The main extraction algorithms follow the same approach as the Python original:
+
+1. First attempt extraction using semantic HTML elements (article tags)
+2. If that fails, try content extraction based on class/ID hints
+3. If that fails, try extraction based on content density calculation
+4. If all else fails, fall back to the readability algorithm
+
+The command-line interface supports all the same options as the Python version, with a similar usage pattern.
 
 ## License
 

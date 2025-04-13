@@ -1,87 +1,87 @@
-//! Metadata extraction for web pages
-//! This module handles extracting metadata such as title, author, date, etc.
+//! Metadata extraction for Trafilatura Rust port.
+//! This module contains utilities for extracting metadata from HTML documents.
 
-use chrono::NaiveDate;
-use kuchiki::NodeRef;
+use scraper::{Html, Selector};
 use regex::Regex;
 use lazy_static::lazy_static;
 
 use crate::{ExtractionResult, TrafilaturaError};
 
 lazy_static! {
-    // Regex for extracting dates from text
+    /// Regex to match dates in common formats
     static ref DATE_REGEX: Regex = Regex::new(
-        r"(?i)(?:\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2}[-/]\d{4})"
+        r"(?i)\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2}[-/]\d{4}|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* \d{1,2},? \d{4}"
     ).unwrap();
-    
-    // Common date formats
-    static ref DATE_FORMATS: Vec<&'static str> = vec![
-        "%Y-%m-%d", "%d-%m-%Y", "%Y/%m/%d", "%d/%m/%Y",
-    ];
 }
 
 /// Extract metadata from a document
-pub fn extract_metadata(document: &NodeRef, mut result: ExtractionResult) -> Result<ExtractionResult, TrafilaturaError> {
-    // Extract title
-    result.title = extract_title(document);
+pub fn extract_metadata(document: &Html, mut result: ExtractionResult) -> Result<ExtractionResult, TrafilaturaError> {
+    // Extract title if not already set
+    if result.title.is_none() {
+        result.title = extract_title(document);
+    }
     
-    // Extract author
-    result.author = extract_author(document);
+    // Extract author if not already set
+    if result.author.is_none() {
+        result.author = extract_author(document);
+    }
     
-    // Extract date
-    result.date = extract_date(document);
+    // Extract date if not already set
+    if result.date.is_none() {
+        result.date = extract_date(document);
+    }
     
-    // Extract description
-    result.description = extract_description(document);
+    // Extract description if not already set
+    if result.description.is_none() {
+        result.description = extract_description(document);
+    }
     
-    // Extract site name
-    result.sitename = extract_sitename(document);
+    // Extract sitename if not already set
+    if result.sitename.is_none() {
+        result.sitename = extract_sitename(document);
+    }
     
-    // Extract categories/tags
+    // Extract categories
     result.categories = extract_categories(document);
     
     Ok(result)
 }
 
 /// Extract the title from a document
-fn extract_title(document: &NodeRef) -> Option<String> {
+fn extract_title(document: &Html) -> Option<String> {
     // Try Open Graph title
-    if let Ok(og_title) = document.select_first("meta[property='og:title']") {
-        let node = og_title.as_node();
-        if let Some(element) = node.as_element() {
-            let attributes = element.attributes.borrow();
-            if let Some(content) = attributes.get("content") {
-                if !content.is_empty() {
-                    return Some(content.to_string());
-                }
+    let og_title_selector = Selector::parse("meta[property='og:title']").unwrap();
+    if let Some(og_title) = document.select(&og_title_selector).next() {
+        if let Some(content) = og_title.value().attr("content") {
+            if !content.is_empty() {
+                return Some(content.to_string());
             }
         }
     }
     
     // Try Twitter title
-    if let Ok(twitter_title) = document.select_first("meta[name='twitter:title']") {
-        let node = twitter_title.as_node();
-        if let Some(element) = node.as_element() {
-            let attributes = element.attributes.borrow();
-            if let Some(content) = attributes.get("content") {
-                if !content.is_empty() {
-                    return Some(content.to_string());
-                }
+    let twitter_title_selector = Selector::parse("meta[name='twitter:title']").unwrap();
+    if let Some(twitter_title) = document.select(&twitter_title_selector).next() {
+        if let Some(content) = twitter_title.value().attr("content") {
+            if !content.is_empty() {
+                return Some(content.to_string());
             }
         }
     }
     
     // Try standard title tag
-    if let Ok(title) = document.select_first("title") {
-        let title_text = title.text_contents();
+    let title_selector = Selector::parse("title").unwrap();
+    if let Some(title) = document.select(&title_selector).next() {
+        let title_text = title.text().collect::<Vec<_>>().join(" ");
         if !title_text.is_empty() {
             return Some(title_text);
         }
     }
     
     // Try h1
-    if let Ok(h1) = document.select_first("h1") {
-        let h1_text = h1.text_contents();
+    let h1_selector = Selector::parse("h1").unwrap();
+    if let Some(h1) = document.select(&h1_selector).next() {
+        let h1_text = h1.text().collect::<Vec<_>>().join(" ");
         if !h1_text.is_empty() {
             return Some(h1_text);
         }
@@ -91,36 +91,32 @@ fn extract_title(document: &NodeRef) -> Option<String> {
 }
 
 /// Extract the author from a document
-fn extract_author(document: &NodeRef) -> Option<String> {
+fn extract_author(document: &Html) -> Option<String> {
     // Try meta author
-    if let Ok(meta_author) = document.select_first("meta[name='author']") {
-        if let Ok(element) = meta_author.as_element() {
-            let attributes = element.attributes.borrow();
-            if let Some(content) = attributes.get("content") {
-                if !content.is_empty() {
-                    return Some(content.to_string());
-                }
+    let meta_author_selector = Selector::parse("meta[name='author']").unwrap();
+    if let Some(meta_author) = document.select(&meta_author_selector).next() {
+        if let Some(content) = meta_author.value().attr("content") {
+            if !content.is_empty() {
+                return Some(content.to_string());
             }
         }
     }
     
     // Try article:author
-    if let Ok(og_author) = document.select_first("meta[property='article:author']") {
-        if let Ok(element) = og_author.as_element() {
-            let attributes = element.attributes.borrow();
-            if let Some(content) = attributes.get("content") {
-                if !content.is_empty() {
-                    return Some(content.to_string());
-                }
+    let og_author_selector = Selector::parse("meta[property='article:author']").unwrap();
+    if let Some(og_author) = document.select(&og_author_selector).next() {
+        if let Some(content) = og_author.value().attr("content") {
+            if !content.is_empty() {
+                return Some(content.to_string());
             }
         }
     }
     
     // Try common author classes
     for class_name in &["author", "byline", "dc-creator"] {
-        let selector = format!(".{}", class_name);
-        if let Ok(author_elem) = document.select_first(&selector) {
-            let author_text = author_elem.text_contents();
+        let selector = Selector::parse(&format!(".{}", class_name)).unwrap();
+        if let Some(author_elem) = document.select(&selector).next() {
+            let author_text = author_elem.text().collect::<Vec<_>>().join(" ");
             if !author_text.is_empty() {
                 return Some(author_text);
             }
@@ -131,43 +127,37 @@ fn extract_author(document: &NodeRef) -> Option<String> {
 }
 
 /// Extract the date from a document
-fn extract_date(document: &NodeRef) -> Option<String> {
+fn extract_date(document: &Html) -> Option<String> {
     // Try published date meta
-    if let Ok(meta_date) = document.select_first("meta[property='article:published_time']") {
-        if let Ok(element) = meta_date.as_element() {
-            let attributes = element.attributes.borrow();
-            if let Some(content) = attributes.get("content") {
-                if !content.is_empty() {
-                    return Some(content.to_string());
-                }
+    let published_time_selector = Selector::parse("meta[property='article:published_time']").unwrap();
+    if let Some(meta_date) = document.select(&published_time_selector).next() {
+        if let Some(content) = meta_date.value().attr("content") {
+            if !content.is_empty() {
+                return Some(content.to_string());
             }
         }
     }
     
     // Try date meta
-    if let Ok(meta_date) = document.select_first("meta[name='date']") {
-        if let Ok(element) = meta_date.as_element() {
-            let attributes = element.attributes.borrow();
-            if let Some(content) = attributes.get("content") {
-                if !content.is_empty() {
-                    return Some(content.to_string());
-                }
+    let date_selector = Selector::parse("meta[name='date']").unwrap();
+    if let Some(meta_date) = document.select(&date_selector).next() {
+        if let Some(content) = meta_date.value().attr("content") {
+            if !content.is_empty() {
+                return Some(content.to_string());
             }
         }
     }
     
     // Try time elements
-    if let Ok(time) = document.select_first("time") {
-        if let Ok(element) = time.as_element() {
-            let attributes = element.attributes.borrow();
-            if let Some(datetime) = attributes.get("datetime") {
-                if !datetime.is_empty() {
-                    return Some(datetime.to_string());
-                }
+    let time_selector = Selector::parse("time").unwrap();
+    if let Some(time) = document.select(&time_selector).next() {
+        if let Some(datetime) = time.value().attr("datetime") {
+            if !datetime.is_empty() {
+                return Some(datetime.to_string());
             }
         }
         
-        let time_text = time.text_contents();
+        let time_text = time.text().collect::<Vec<_>>().join(" ");
         if !time_text.is_empty() {
             if let Some(date_match) = DATE_REGEX.find(&time_text) {
                 return Some(date_match.as_str().to_string());
@@ -177,9 +167,9 @@ fn extract_date(document: &NodeRef) -> Option<String> {
     
     // Try date classes
     for class_name in &["date", "published", "timestamp", "post-date"] {
-        let selector = format!(".{}", class_name);
-        if let Ok(date_elem) = document.select_first(&selector) {
-            let date_text = date_elem.text_contents();
+        let selector = Selector::parse(&format!(".{}", class_name)).unwrap();
+        if let Some(date_elem) = document.select(&selector).next() {
+            let date_text = date_elem.text().collect::<Vec<_>>().join(" ");
             if !date_text.is_empty() {
                 if let Some(date_match) = DATE_REGEX.find(&date_text) {
                     return Some(date_match.as_str().to_string());
@@ -193,39 +183,33 @@ fn extract_date(document: &NodeRef) -> Option<String> {
 }
 
 /// Extract the description from a document
-fn extract_description(document: &NodeRef) -> Option<String> {
+fn extract_description(document: &Html) -> Option<String> {
     // Try Open Graph description
-    if let Ok(og_desc) = document.select_first("meta[property='og:description']") {
-        if let Ok(element) = og_desc.as_element() {
-            let attributes = element.attributes.borrow();
-            if let Some(content) = attributes.get("content") {
-                if !content.is_empty() {
-                    return Some(content.to_string());
-                }
+    let og_desc_selector = Selector::parse("meta[property='og:description']").unwrap();
+    if let Some(og_desc) = document.select(&og_desc_selector).next() {
+        if let Some(content) = og_desc.value().attr("content") {
+            if !content.is_empty() {
+                return Some(content.to_string());
             }
         }
     }
     
     // Try meta description
-    if let Ok(meta_desc) = document.select_first("meta[name='description']") {
-        if let Ok(element) = meta_desc.as_element() {
-            let attributes = element.attributes.borrow();
-            if let Some(content) = attributes.get("content") {
-                if !content.is_empty() {
-                    return Some(content.to_string());
-                }
+    let meta_desc_selector = Selector::parse("meta[name='description']").unwrap();
+    if let Some(meta_desc) = document.select(&meta_desc_selector).next() {
+        if let Some(content) = meta_desc.value().attr("content") {
+            if !content.is_empty() {
+                return Some(content.to_string());
             }
         }
     }
     
     // Try Twitter description
-    if let Ok(twitter_desc) = document.select_first("meta[name='twitter:description']") {
-        if let Ok(element) = twitter_desc.as_element() {
-            let attributes = element.attributes.borrow();
-            if let Some(content) = attributes.get("content") {
-                if !content.is_empty() {
-                    return Some(content.to_string());
-                }
+    let twitter_desc_selector = Selector::parse("meta[name='twitter:description']").unwrap();
+    if let Some(twitter_desc) = document.select(&twitter_desc_selector).next() {
+        if let Some(content) = twitter_desc.value().attr("content") {
+            if !content.is_empty() {
+                return Some(content.to_string());
             }
         }
     }
@@ -234,22 +218,21 @@ fn extract_description(document: &NodeRef) -> Option<String> {
 }
 
 /// Extract the site name from a document
-fn extract_sitename(document: &NodeRef) -> Option<String> {
+fn extract_sitename(document: &Html) -> Option<String> {
     // Try Open Graph site name
-    if let Ok(og_site) = document.select_first("meta[property='og:site_name']") {
-        if let Ok(element) = og_site.as_element() {
-            let attributes = element.attributes.borrow();
-            if let Some(content) = attributes.get("content") {
-                if !content.is_empty() {
-                    return Some(content.to_string());
-                }
+    let og_site_selector = Selector::parse("meta[property='og:site_name']").unwrap();
+    if let Some(og_site) = document.select(&og_site_selector).next() {
+        if let Some(content) = og_site.value().attr("content") {
+            if !content.is_empty() {
+                return Some(content.to_string());
             }
         }
     }
     
     // Try copyright
-    if let Ok(copyright) = document.select_first(".copyright") {
-        let text = copyright.text_contents();
+    let copyright_selector = Selector::parse(".copyright").unwrap();
+    if let Some(copyright) = document.select(&copyright_selector).next() {
+        let text = copyright.text().collect::<Vec<_>>().join(" ");
         if !text.is_empty() {
             return Some(text);
         }
@@ -259,40 +242,34 @@ fn extract_sitename(document: &NodeRef) -> Option<String> {
 }
 
 /// Extract categories and tags from a document
-fn extract_categories(document: &NodeRef) -> Vec<String> {
+fn extract_categories(document: &Html) -> Vec<String> {
     let mut categories = Vec::new();
     
     // Try article:section
-    if let Ok(section) = document.select_first("meta[property='article:section']") {
-        if let Ok(element) = section.as_element() {
-            let attributes = element.attributes.borrow();
-            if let Some(content) = attributes.get("content") {
-                if !content.is_empty() {
-                    categories.push(content.to_string());
-                }
+    let section_selector = Selector::parse("meta[property='article:section']").unwrap();
+    if let Some(section) = document.select(&section_selector).next() {
+        if let Some(content) = section.value().attr("content") {
+            if !content.is_empty() {
+                categories.push(content.to_string());
             }
         }
     }
     
     // Try article:tag
-    let tags = document.select("meta[property='article:tag']").unwrap();
-    for tag in tags {
-        if let Ok(element) = tag.as_element() {
-            let attributes = element.attributes.borrow();
-            if let Some(content) = attributes.get("content") {
-                if !content.is_empty() {
-                    categories.push(content.to_string());
-                }
+    let tag_selector = Selector::parse("meta[property='article:tag']").unwrap();
+    for tag in document.select(&tag_selector) {
+        if let Some(content) = tag.value().attr("content") {
+            if !content.is_empty() {
+                categories.push(content.to_string());
             }
         }
     }
     
     // Try common tag classes
     for class_name in &["tags", "categories", "category", "topics"] {
-        let selector = format!(".{} a", class_name);
-        let links = document.select(&selector).unwrap();
-        for link in links {
-            let text = link.text_contents();
+        let selector = Selector::parse(&format!(".{} a", class_name)).unwrap();
+        for link in document.select(&selector) {
+            let text = link.text().collect::<Vec<_>>().join(" ");
             if !text.is_empty() {
                 categories.push(text);
             }
@@ -305,7 +282,7 @@ fn extract_categories(document: &NodeRef) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kuchiki::parse_html;
+    use scraper::Html;
 
     #[test]
     fn test_extract_title() {
@@ -321,7 +298,7 @@ mod tests {
         </html>
         "#;
         
-        let document = parse_html().one(html);
+        let document = Html::parse_document(html);
         
         // Should prefer OG title
         assert_eq!(extract_title(&document), Some("OG Title".to_string()));
@@ -340,7 +317,7 @@ mod tests {
         </html>
         "#;
         
-        let document = parse_html().one(html);
+        let document = Html::parse_document(html);
         
         // Should prefer meta author
         assert_eq!(extract_author(&document), Some("John Doe".to_string()));
@@ -359,7 +336,7 @@ mod tests {
         </html>
         "#;
         
-        let document = parse_html().one(html);
+        let document = Html::parse_document(html);
         
         // Should prefer article:published_time
         assert_eq!(extract_date(&document), Some("2023-09-01".to_string()));

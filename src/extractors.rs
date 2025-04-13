@@ -1,13 +1,12 @@
 //! Content extraction algorithms for Trafilatura Rust port.
 //! This module implements various extraction strategies to identify the main content.
 
-use kuchiki::NodeRef;
-use regex::Regex;
+use scraper::{Html, Selector, ElementRef};
 use lazy_static::lazy_static;
 use log::debug;
 
 use crate::{ExtractionConfig, TrafilaturaError};
-use crate::html::{clean_html, get_text_content, has_class_hint, has_id_hint, node_to_html};
+use crate::html::{clean_html, get_text_content, has_class_hint, has_id_hint};
 
 lazy_static! {
     /// Content element hints - classes that suggest main content
@@ -54,16 +53,16 @@ lazy_static! {
 }
 
 /// Extract content from a document using multiple strategies
-pub fn extract_content(document: &NodeRef, config: &ExtractionConfig) -> Result<String, TrafilaturaError> {
+pub fn extract_content(document: &Html, config: &ExtractionConfig) -> Result<String, TrafilaturaError> {
     // First clean the document
     let cleaned_document = clean_html(document, config)?;
     
     // Try to extract content using different strategies in order
     
     // 1. Try with article tag
-    if let Some(article) = cleaned_document.select_first("article").ok() {
-        let node = article.as_node();
-        let text = get_text_content(node, config);
+    let article_selector = Selector::parse("article").unwrap();
+    if let Some(article) = cleaned_document.select(&article_selector).next() {
+        let text = get_text_content(&article, config);
         if !text.is_empty() && text.len() >= config.min_extracted_size {
             debug!("Content extracted using article tag strategy");
             return Ok(text);
@@ -87,12 +86,12 @@ pub fn extract_content(document: &NodeRef, config: &ExtractionConfig) -> Result<
     }
     
     // 4. Just extract <p> tags as fallback
-    let paragraphs = cleaned_document.select("p").unwrap();
+    let p_selector = Selector::parse("p").unwrap();
+    let paragraphs = cleaned_document.select(&p_selector);
     let mut text = String::new();
     
     for paragraph in paragraphs {
-        let paragraph_node = paragraph.as_node();
-        let paragraph_text = get_text_content(paragraph_node, config);
+        let paragraph_text = get_text_content(&paragraph, config);
         if !paragraph_text.trim().is_empty() {
             text.push_str(&paragraph_text);
             text.push('\n');
@@ -104,13 +103,12 @@ pub fn extract_content(document: &NodeRef, config: &ExtractionConfig) -> Result<
 }
 
 /// Extract content based on class and ID hints
-fn extract_by_hints(document: &NodeRef, config: &ExtractionConfig) -> Option<String> {
+fn extract_by_hints(document: &Html, config: &ExtractionConfig) -> Option<String> {
     // Try to find elements with content class hints
     for class_hint in CONTENT_CLASSES.iter() {
-        let selector = format!("[class*='{}']", class_hint);
-        if let Ok(element) = document.select_first(&selector) {
-            let node = element.as_node();
-            let text = get_text_content(node, config);
+        let selector = Selector::parse(&format!("[class*='{}']", class_hint)).unwrap();
+        if let Some(element) = document.select(&selector).next() {
+            let text = get_text_content(&element, config);
             if !text.is_empty() && text.len() >= config.min_extracted_size {
                 return Some(text);
             }
@@ -119,10 +117,9 @@ fn extract_by_hints(document: &NodeRef, config: &ExtractionConfig) -> Option<Str
     
     // Try to find elements with content ID hints
     for id_hint in CONTENT_IDS.iter() {
-        let selector = format!("[id*='{}']", id_hint);
-        if let Ok(element) = document.select_first(&selector) {
-            let node = element.as_node();
-            let text = get_text_content(node, config);
+        let selector = Selector::parse(&format!("[id*='{}']", id_hint)).unwrap();
+        if let Some(element) = document.select(&selector).next() {
+            let text = get_text_content(&element, config);
             if !text.is_empty() && text.len() >= config.min_extracted_size {
                 return Some(text);
             }
@@ -133,24 +130,24 @@ fn extract_by_hints(document: &NodeRef, config: &ExtractionConfig) -> Option<Str
 }
 
 /// Extract content based on text density
-fn extract_by_density(document: &NodeRef, config: &ExtractionConfig) -> Option<String> {
+fn extract_by_density(document: &Html, config: &ExtractionConfig) -> Option<String> {
     // Find all potential content containers
     let candidates = find_content_candidates(document);
     
     // If we found candidates, return the best one
     if !candidates.is_empty() {
-        let mut best_candidate = candidates[0].clone();
-        let mut best_score = score_node(&best_candidate, config);
+        let mut best_candidate = &candidates[0];
+        let mut best_score = score_node(best_candidate, config);
         
         for candidate in &candidates[1..] {
             let score = score_node(candidate, config);
             if score > best_score {
-                best_candidate = candidate.clone();
+                best_candidate = candidate;
                 best_score = score;
             }
         }
         
-        let text = get_text_content(&best_candidate, config);
+        let text = get_text_content(best_candidate, config);
         if !text.is_empty() {
             return Some(text);
         }
@@ -160,28 +157,26 @@ fn extract_by_density(document: &NodeRef, config: &ExtractionConfig) -> Option<S
 }
 
 /// Find potential content containers in the document
-fn find_content_candidates(document: &NodeRef) -> Vec<NodeRef> {
+fn find_content_candidates(document: &Html) -> Vec<ElementRef> {
     let mut candidates = Vec::new();
     
     // Look for common content containers
     for &tag in &["article", "section", "main", "div", "body"] {
-        let elements = document.select(tag).unwrap();
-        for element in elements {
-            let node = element.as_node();
-            
+        let selector = Selector::parse(tag).unwrap();
+        for element in document.select(&selector) {
             // Skip elements that are likely navigation or footer
-            if has_class_hint(node, &["nav", "navigation", "menu", "footer", "header", "sidebar"]) {
+            if has_class_hint(&element, &["nav", "navigation", "menu", "footer", "header", "sidebar"]) {
                 continue;
             }
             
-            if has_id_hint(node, &["nav", "navigation", "menu", "footer", "header", "sidebar"]) {
+            if has_id_hint(&element, &["nav", "navigation", "menu", "footer", "header", "sidebar"]) {
                 continue;
             }
             
             // Check if this element has enough text content
-            let text_length = node.text_contents().len();
+            let text_length = element.text().collect::<String>().len();
             if text_length > 100 {
-                candidates.push(node.clone());
+                candidates.push(element);
             }
         }
     }
@@ -190,30 +185,26 @@ fn find_content_candidates(document: &NodeRef) -> Vec<NodeRef> {
 }
 
 /// Score a node based on its content
-fn score_node(node: &NodeRef, config: &ExtractionConfig) -> i32 {
+fn score_node(element: &ElementRef, _config: &ExtractionConfig) -> i32 {
     let mut score = 0;
     
     // Score based on text length
-    let text_content = node.text_contents();
+    let text_content: String = element.text().collect();
     score += (text_content.len() / 25) as i32;
     
     // Bonus for content class/id hints
-    if has_class_hint(node, &CONTENT_CLASSES) {
+    if has_class_hint(element, &CONTENT_CLASSES) {
         score += 50;
     }
     
-    if has_id_hint(node, &CONTENT_IDS) {
+    if has_id_hint(element, &CONTENT_IDS) {
         score += 50;
     }
     
     // Score based on child elements
-    let children = node.select("*").unwrap();
-    for child in children {
-        let child_node = child.as_node();
-        let tag_name = match child_node.as_element() {
-            Ok(element) => element.name.local.to_string(),
-            Err(_) => continue,
-        };
+    let all_selector = Selector::parse("*").unwrap();
+    for child in element.select(&all_selector) {
+        let tag_name = child.value().name();
         
         // Add weight based on tag
         for &(tag, weight) in TAG_WEIGHTS.iter() {
@@ -225,7 +216,7 @@ fn score_node(node: &NodeRef, config: &ExtractionConfig) -> i32 {
     }
     
     // Penalize for high link density
-    let link_density = calculate_link_density(node);
+    let link_density = calculate_link_density(element);
     if link_density > *LINK_DENSITY_THRESHOLD {
         score -= (link_density * 100.0) as i32;
     }
@@ -234,18 +225,19 @@ fn score_node(node: &NodeRef, config: &ExtractionConfig) -> i32 {
 }
 
 /// Calculate the link density of a node (text in links / total text)
-fn calculate_link_density(node: &NodeRef) -> f64 {
-    let total_text_length = node.text_contents().len();
+fn calculate_link_density(element: &ElementRef) -> f64 {
+    let total_text_length = element.text().collect::<String>().len();
     
     if total_text_length == 0 {
         return 0.0;
     }
     
-    let links = node.select("a").unwrap();
+    let a_selector = Selector::parse("a").unwrap();
+    let links = element.select(&a_selector);
     let mut link_text_length = 0;
     
     for link in links {
-        link_text_length += link.as_node().text_contents().len();
+        link_text_length += link.text().collect::<String>().len();
     }
     
     link_text_length as f64 / total_text_length as f64
@@ -254,12 +246,12 @@ fn calculate_link_density(node: &NodeRef) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kuchiki::parse_html;
+    use scraper::Html;
 
     #[test]
     fn test_extract_content_with_article() {
         let html = r#"<html><body><article><h1>Title</h1><p>Main content paragraph.</p></article><div>Some other content</div></body></html>"#;
-        let document = parse_html().one(html);
+        let document = Html::parse_document(html);
         let config = ExtractionConfig::default();
         
         let content = extract_content(&document, &config).unwrap();
@@ -271,7 +263,7 @@ mod tests {
     #[test]
     fn test_extract_content_with_hints() {
         let html = r#"<html><body><div class="content"><h1>Title</h1><p>Main content paragraph.</p></div><div>Some other content</div></body></html>"#;
-        let document = parse_html().one(html);
+        let document = Html::parse_document(html);
         let config = ExtractionConfig::default();
         
         let content = extract_content(&document, &config).unwrap();
@@ -282,11 +274,12 @@ mod tests {
 
     #[test]
     fn test_calculate_link_density() {
-        let html = r#"<div>This is a <a href="#">link</a> in some text.</div>"#;
-        let document = parse_html().one(html);
+        let html = "<div>This is a <a href=\"#\">link</a> in some text.</div>";
+        let document = Html::parse_document(html);
         
-        let div = document.select_first("div").unwrap();
-        let density = calculate_link_density(div.as_node());
+        let div_selector = Selector::parse("div").unwrap();
+        let div = document.select(&div_selector).next().unwrap();
+        let density = calculate_link_density(&div);
         
         // Link text "link" is 4 chars, total text is "This is a link in some text." (27 chars)
         assert!((density - 4.0/27.0).abs() < 0.01);

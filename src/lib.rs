@@ -13,10 +13,10 @@ pub mod utils;
 
 use std::fs::File;
 use std::io::Read;
-use kuchiki::traits::TendrilSink;
 use std::path::Path;
 
 use reqwest::blocking::Client;
+use scraper::Html;
 use thiserror::Error;
 use url::Url;
 
@@ -36,6 +36,9 @@ pub enum TrafilaturaError {
 
     #[error("Extraction error: {0}")]
     ExtractionError(String),
+    
+    #[error("JSON serialization error: {0}")]
+    JsonError(#[from] serde_json::Error),
 }
 
 /// Output format options for extracted content
@@ -143,7 +146,7 @@ pub fn extract_file<P: AsRef<Path>>(path: P, config: &ExtractionConfig) -> Resul
 
 /// Extract text from an HTML string
 pub fn extract_html(html: &str, config: &ExtractionConfig) -> Result<ExtractionResult, TrafilaturaError> {
-    let document = kuchiki::parse_html().one(html);
+    let document = Html::parse_document(html);
     
     let mut result = ExtractionResult::default();
     
