@@ -65,10 +65,119 @@ lazy_static! {
     static ref LINK_DENSITY_THRESHOLD: f64 = 0.33;  // Lowered from 0.5 to be more aggressive at filtering
 }
 
+/// Extract content from Wikipedia pages using their specific structure
+fn extract_wikipedia_content(document: &Html, _config: &ExtractionConfig) -> Option<String> {
+    // Check if this is a Wikipedia page (looking for specific elements or patterns)
+    // Wikipedia pages have a specific structure with id="content" and class="mw-parser-output"
+    
+    // First check for the main content wrapper
+    let main_content_selector = Selector::parse("#mw-content-text").unwrap();
+    let main_content = document.select(&main_content_selector).next()?;
+    
+    // Find the parser output div which contains all the article content
+    let parser_output_selector = Selector::parse(".mw-parser-output").unwrap();
+    let parser_output = main_content.select(&parser_output_selector).next()?;
+    
+    // Remove unwanted elements specific to Wikipedia
+    // - Table of contents
+    // - Navigation boxes
+    // - Infoboxes
+    // - References section
+    // - External links section
+    // - See also section
+    // Prepare text extraction
+
+    // Extract all paragraphs first
+    let mut content = String::new();
+    
+    // Add the title
+    let title_selector = Selector::parse("#firstHeading").unwrap();
+    if let Some(title) = document.select(&title_selector).next() {
+        content.push_str(&title.text().collect::<String>());
+        content.push_str("\n\n");
+    }
+    
+    // Process sections and paragraphs
+    let section_selector = Selector::parse("h1, h2, h3, h4, h5, h6, p, ul, ol").unwrap();
+    let mut skip_section = false;
+    
+    for element in parser_output.select(&section_selector) {
+        let tag_name = element.value().name();
+        let element_text = element.text().collect::<String>().trim().to_string();
+        
+        // Skip empty elements
+        if element_text.is_empty() {
+            continue;
+        }
+        
+        // Check for heading indicating sections to skip
+        if tag_name.starts_with('h') {
+            skip_section = element_text == "References" || 
+                          element_text == "External links" || 
+                          element_text == "See also" || 
+                          element_text == "Further reading" ||
+                          element_text == "Notes" ||
+                          element_text.contains("Bibliography") ||
+                          element_text.contains("Sources");
+            
+            if !skip_section {
+                content.push_str(&element_text);
+                content.push_str("\n\n");
+            }
+            continue;
+        }
+        
+        if skip_section {
+            continue;
+        }
+        
+        // Process paragraphs and lists
+        if tag_name == "p" {
+            // Skip very short paragraphs that are likely metadata
+            if element_text.len() < 20 && (
+                element_text.contains("Redirected from") || 
+                element_text.contains("Jump to navigation") || 
+                element_text.contains("From Wikipedia")
+            ) {
+                continue;
+            }
+            
+            content.push_str(&element_text);
+            content.push_str("\n\n");
+        } else if tag_name == "ul" || tag_name == "ol" {
+            // Process lists
+            let li_selector = Selector::parse("li").unwrap();
+            for li in element.select(&li_selector) {
+                let li_text = li.text().collect::<String>().trim().to_string();
+                if !li_text.is_empty() {
+                    content.push_str("• ");
+                    content.push_str(&li_text);
+                    content.push_str("\n");
+                }
+            }
+            content.push_str("\n");
+        }
+    }
+    
+    if !content.is_empty() {
+        Some(content.trim().to_string())
+    } else {
+        None
+    }
+}
+
 /// Extract content from a document using multiple strategies
 pub fn extract_content(document: &Html, config: &ExtractionConfig) -> Result<String, TrafilaturaError> {
     // First clean the document
     let cleaned_document = clean_html(document, config)?;
+    
+    // Check if this is a Wikipedia page and use specialized extraction
+    if let Some(content) = extract_wikipedia_content(&cleaned_document, config) {
+        if !content.is_empty() && content.len() >= config.min_extracted_size {
+            debug!("Content extracted using Wikipedia-specific strategy");
+            return Ok(content);
+        }
+    }
     
     // Try to extract content using different strategies in order
     

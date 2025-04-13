@@ -10,6 +10,7 @@ pub mod html;
 pub mod metadata;
 pub mod readability;
 pub mod utils;
+pub mod xpath;
 
 use std::fs::File;
 use std::io::Read;
@@ -155,7 +156,15 @@ pub fn extract_html(html: &str, config: &ExtractionConfig) -> Result<ExtractionR
         result = metadata::extract_metadata(&document, result)?;
     }
     
-    // Try different extraction methods in order of preference
+    // First try using XPath-based extraction (similar to Python trafilatura)
+    let xpath_content = xpath::extract_with_xpath(html, config)?;
+    
+    if !xpath_content.is_empty() && xpath_content.len() >= config.min_extracted_size {
+        result.content = xpath_content;
+        return Ok(result);
+    }
+    
+    // Try original extraction methods as fallback
     let content = extractors::extract_content(&document, config)?;
     
     if content.is_empty() || content.len() < config.min_extracted_size {
@@ -194,5 +203,48 @@ mod tests {
         assert_eq!(config.include_images, false);
         assert_eq!(config.output_format, OutputFormat::Text);
         assert_eq!(config.min_extracted_size, 250);
+    }
+    
+    #[test]
+    fn test_xpath_extraction() {
+        let html = r#"<!DOCTYPE html>
+        <html>
+        <head>
+            <title>Test Page</title>
+            <meta property="og:site_name" content="Wikipedia" />
+        </head>
+        <body>
+            <div id="content">
+                <h1>Main Heading</h1>
+                <div id="mw-content-text">
+                    <div class="mw-parser-output">
+                        <p>This is the main paragraph of content that should be extracted.</p>
+                        <p>This is a second paragraph.</p>
+                        <ul>
+                            <li>List item 1</li>
+                            <li>List item 2</li>
+                        </ul>
+                        <h2>References</h2>
+                        <div class="references">
+                            <p>Reference 1</p>
+                            <p>Reference 2</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </body>
+        </html>"#;
+        
+        let config = ExtractionConfig::default();
+        let result = extract_html(html, &config).unwrap();
+        
+        assert!(result.content.contains("Main Heading"));
+        assert!(result.content.contains("main paragraph of content"));
+        assert!(result.content.contains("second paragraph"));
+        assert!(result.content.contains("List item 1"));
+        assert!(result.content.contains("List item 2"));
+        
+        // References should be excluded
+        assert!(!result.content.contains("Reference 1"));
     }
 }
