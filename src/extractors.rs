@@ -1,7 +1,7 @@
 //! Content extraction algorithms for Trafilatura Rust port.
 //! This module implements various extraction strategies to identify the main content.
 
-use scraper::{Html, Selector, ElementRef};
+use scraper::{Html, Selector, ElementRef, Element};
 use lazy_static::lazy_static;
 use log::debug;
 
@@ -12,44 +12,57 @@ lazy_static! {
     /// Content element hints - classes that suggest main content
     static ref CONTENT_CLASSES: Vec<&'static str> = vec![
         "article", "post", "content", "entry", "main", "text", "blog", "story", "body",
-        "column", "section", "post-content", "main-content", "article-content"
+        "column", "section", "post-content", "main-content", "article-content",
+        "story-content", "story-body", "news-content", "news-article", "news-story",
+        "entry-content", "article-body", "article-text", "articleBody", "content-article",
+        "post-text", "post-body", "content-text", "content-body", "rich-text", "page-content"
     ];
 
     /// Content element hints - IDs that suggest main content
     static ref CONTENT_IDS: Vec<&'static str> = vec![
         "article", "post", "content", "entry", "main", "text", "blog", "story", "body",
-        "column", "section", "post-content", "main-content", "article-content"
+        "column", "section", "post-content", "main-content", "article-content",
+        "story-content", "story-body", "news-content", "news-article", "news-story",
+        "entry-content", "article-body", "article-text", "articleBody", "content-article",
+        "post-text", "post-body", "content-text", "content-body", "story-text", "page-content"
     ];
 
     /// Tag weights for scoring potential content containers
     static ref TAG_WEIGHTS: Vec<(&'static str, i32)> = vec![
         ("div", 5),
-        ("p", 10),
-        ("h1", 5),
-        ("h2", 5),
-        ("h3", 3),
-        ("h4", 2),
-        ("h5", 1),
-        ("article", 15),
-        ("section", 10),
-        ("main", 15),
-        ("content", 15),
+        ("p", 15),         // Increased paragraph weight
+        ("h1", 10),        // Increased heading weights
+        ("h2", 8),
+        ("h3", 6),
+        ("h4", 4),
+        ("h5", 3),
+        ("article", 25),   // Increased article weight
+        ("section", 15),   // Increased section weight
+        ("main", 25),      // Increased main weight
+        ("content", 20),   // Increased content weight
         ("li", 1),
         ("td", 1),
-        ("a", -2),
-        ("script", -20),
-        ("style", -20),
-        ("header", -10),
-        ("footer", -10),
-        ("nav", -10),
-        ("aside", -10),
-        ("iframe", -15),
-        ("form", -10),
-        ("button", -5),
+        ("a", -5),         // Increased penalty for links
+        ("script", -50),   // Increased penalties for non-content elements
+        ("style", -50),
+        ("header", -25),
+        ("footer", -50),
+        ("nav", -50),
+        ("aside", -30),
+        ("iframe", -40),
+        ("form", -20),
+        ("button", -15),
+        ("banner", -30),
+        ("social", -25),
+        ("share", -25),
+        ("comment", -25),
+        ("advertisement", -50),
+        ("meta", -25),
+        ("widget", -25),
     ];
 
     /// Boilerplate link density threshold - links above this ratio are likely navigation
-    static ref LINK_DENSITY_THRESHOLD: f64 = 0.5;
+    static ref LINK_DENSITY_THRESHOLD: f64 = 0.33;  // Lowered from 0.5 to be more aggressive at filtering
 }
 
 /// Extract content from a document using multiple strategies
@@ -59,17 +72,31 @@ pub fn extract_content(document: &Html, config: &ExtractionConfig) -> Result<Str
     
     // Try to extract content using different strategies in order
     
-    // 1. Try with article tag
+    // 1. Try with article tag - semantic HTML is the most reliable indicator
     let article_selector = Selector::parse("article").unwrap();
-    if let Some(article) = cleaned_document.select(&article_selector).next() {
+    let articles = cleaned_document.select(&article_selector);
+    
+    // Find the longest and most content-rich article element
+    let mut best_article_text = String::new();
+    let mut best_article_score = 0;
+    
+    for article in articles {
         let text = get_text_content(&article, config);
         if !text.is_empty() && text.len() >= config.min_extracted_size {
-            debug!("Content extracted using article tag strategy");
-            return Ok(text);
+            let score = score_node(&article, config);
+            if score > best_article_score {
+                best_article_text = text;
+                best_article_score = score;
+            }
         }
     }
     
-    // 2. Try with content hints
+    if !best_article_text.is_empty() {
+        debug!("Content extracted using article tag strategy");
+        return Ok(best_article_text);
+    }
+    
+    // 2. Try with content hints - classes and IDs that suggest content
     if let Some(content) = extract_by_hints(&cleaned_document, config) {
         if !content.is_empty() && content.len() >= config.min_extracted_size {
             debug!("Content extracted using hints strategy");
@@ -77,7 +104,7 @@ pub fn extract_content(document: &Html, config: &ExtractionConfig) -> Result<Str
         }
     }
     
-    // 3. Try with content density
+    // 3. Try with content density - most reliable fallback
     if let Some(content) = extract_by_density(&cleaned_document, config) {
         if !content.is_empty() && content.len() >= config.min_extracted_size {
             debug!("Content extracted using density strategy");
@@ -85,20 +112,63 @@ pub fn extract_content(document: &Html, config: &ExtractionConfig) -> Result<Str
         }
     }
     
-    // 4. Just extract <p> tags as fallback
-    let p_selector = Selector::parse("p").unwrap();
-    let paragraphs = cleaned_document.select(&p_selector);
-    let mut text = String::new();
+    // 4. Extract paragraphs as fallback, but be more selective
+    let mut paragraphs = Vec::new();
     
-    for paragraph in paragraphs {
-        let paragraph_text = get_text_content(&paragraph, config);
+    // Get all paragraphs
+    let p_selector = Selector::parse("p").unwrap();
+    for p in cleaned_document.select(&p_selector) {
+        // Skip very short paragraphs that are likely menu items or buttons
+        let text = p.text().collect::<String>();
+        if text.len() < 20 {
+            continue;
+        }
+        
+        // Skip paragraphs with high link density
+        let link_density = calculate_link_density(&p);
+        if link_density > *LINK_DENSITY_THRESHOLD {
+            continue;
+        }
+        
+        // Skip paragraphs in unwanted containers
+        if let Some(parent) = p.parent_element() {
+            if has_class_hint(&parent, &["nav", "menu", "footer", "header", "sidebar", "comment"]) {
+                continue;
+            }
+        }
+        
+        paragraphs.push(p);
+    }
+    
+    // If we have multiple paragraphs, try to find clusters of them
+    if paragraphs.len() >= 3 {
+        // Group consecutive paragraphs that are likely part of the main content
+        let mut text = String::new();
+        for p in paragraphs {
+            let paragraph_text = get_text_content(&p, config);
+            if !paragraph_text.trim().is_empty() {
+                text.push_str(&paragraph_text);
+                text.push('\n');
+            }
+        }
+        
+        if text.len() >= config.min_extracted_size {
+            debug!("Content extracted using filtered paragraphs strategy");
+            return Ok(text.trim().to_string());
+        }
+    }
+    
+    // 5. Last resort - just try to get any text
+    let mut text = String::new();
+    for p in cleaned_document.select(&p_selector) {
+        let paragraph_text = get_text_content(&p, config);
         if !paragraph_text.trim().is_empty() {
             text.push_str(&paragraph_text);
             text.push('\n');
         }
     }
     
-    debug!("Content extracted using paragraphs fallback strategy");
+    debug!("Content extracted using last-resort paragraphs strategy");
     Ok(text.trim().to_string())
 }
 
@@ -160,22 +230,61 @@ fn extract_by_density(document: &Html, config: &ExtractionConfig) -> Option<Stri
 fn find_content_candidates(document: &Html) -> Vec<ElementRef> {
     let mut candidates = Vec::new();
     
-    // Look for common content containers
-    for &tag in &["article", "section", "main", "div", "body"] {
+    // Common unwanted classes to filter out
+    let unwanted_classes = vec![
+        "nav", "navbar", "navigation", "menu", "footer", "header", "sidebar",
+        "advertisement", "ad", "social", "share", "sharing", "comment", "comments",
+        "related", "recommended", "promotion", "promo", "subscribe", "subscription",
+        "download", "copyright", "tags", "tag-cloud", "breadcrumb", "pagination",
+        "pager", "widget", "banner"
+    ];
+    
+    // Common unwanted IDs to filter out
+    let unwanted_ids = vec![
+        "nav", "navbar", "navigation", "menu", "footer", "header", "sidebar",
+        "advertisement", "ad", "social", "share", "sharing", "comment", "comments",
+        "related", "recommended", "promotion", "promo", "subscribe", "subscription",
+        "download", "copyright", "tags", "tag-cloud", "breadcrumb", "pagination",
+        "pager", "widget", "banner"
+    ];
+    
+    // Look for common content containers - prioritizing semantic tags first
+    for &tag in &["article", "main", "section", "div", "body"] {
         let selector = Selector::parse(tag).unwrap();
         for element in document.select(&selector) {
-            // Skip elements that are likely navigation or footer
-            if has_class_hint(&element, &["nav", "navigation", "menu", "footer", "header", "sidebar"]) {
+            // Skip elements that are likely navigation or other non-content
+            if has_class_hint(&element, &unwanted_classes) || has_id_hint(&element, &unwanted_ids) {
                 continue;
             }
             
-            if has_id_hint(&element, &["nav", "navigation", "menu", "footer", "header", "sidebar"]) {
+            // Skip elements that have too many links (likely navigation)
+            let link_density = calculate_link_density(&element);
+            if link_density > *LINK_DENSITY_THRESHOLD {
                 continue;
             }
+            
+            // Check paragraph count - content likely has multiple paragraphs
+            let p_selector = Selector::parse("p").unwrap();
+            let p_count = element.select(&p_selector).count();
             
             // Check if this element has enough text content
-            let text_length = element.text().collect::<String>().len();
-            if text_length > 100 {
+            let text_content = element.text().collect::<String>();
+            let text_length = text_content.len();
+            
+            // Prioritize elements with good content indicators
+            if (text_length > 250 && p_count >= 2) || 
+               (text_length > 500) || 
+               (p_count >= 4) || 
+               has_class_hint(&element, &CONTENT_CLASSES) || 
+               has_id_hint(&element, &CONTENT_IDS) {
+                candidates.push(element);
+                
+                // For article tags, give them higher priority by adding them earlier in the list
+                if tag == "article" || tag == "main" {
+                    candidates.insert(0, element);
+                }
+            } else if text_length > 100 {
+                // Lower-quality candidates still get added
                 candidates.push(element);
             }
         }
@@ -188,20 +297,47 @@ fn find_content_candidates(document: &Html) -> Vec<ElementRef> {
 fn score_node(element: &ElementRef, _config: &ExtractionConfig) -> i32 {
     let mut score = 0;
     
-    // Score based on text length
+    // Score based on text length (more text = more likely to be content)
     let text_content: String = element.text().collect();
-    score += (text_content.len() / 25) as i32;
+    score += (text_content.len() / 20) as i32; // Increased the text weight factor
     
     // Bonus for content class/id hints
     if has_class_hint(element, &CONTENT_CLASSES) {
-        score += 50;
+        score += 75; // Increased the bonus for content class hints
     }
     
     if has_id_hint(element, &CONTENT_IDS) {
-        score += 50;
+        score += 75; // Increased the bonus for content ID hints
     }
     
-    // Score based on child elements
+    // Count paragraphs - articles typically have several paragraphs
+    let p_selector = Selector::parse("p").unwrap();
+    let p_count = element.select(&p_selector).count();
+    score += p_count as i32 * 10; // Each paragraph adds to the score
+    
+    // Count text-heavy elements that suggest content (paragraphs, headings, list items)
+    let content_elements_selector = Selector::parse("p, h1, h2, h3, h4, h5, h6, li").unwrap();
+    let content_elements_count = element.select(&content_elements_selector).count();
+    score += content_elements_count as i32 * 5;
+    
+    // Penalize elements with non-content hints
+    let unwanted_classes = vec![
+        "nav", "navbar", "navigation", "menu", "footer", "header", "sidebar", 
+        "advertisement", "social", "sharing", "comment", "related", "recommendation"
+    ];
+    if has_class_hint(element, &unwanted_classes) {
+        score -= 50;
+    }
+    
+    let unwanted_ids = vec![
+        "nav", "navbar", "navigation", "menu", "footer", "header", "sidebar",
+        "advertisement", "social", "sharing", "comment", "related", "recommendation"
+    ];
+    if has_id_hint(element, &unwanted_ids) {
+        score -= 50;
+    }
+    
+    // Score based on child elements' tag types
     let all_selector = Selector::parse("*").unwrap();
     for child in element.select(&all_selector) {
         let tag_name = child.value().name();
@@ -215,10 +351,16 @@ fn score_node(element: &ElementRef, _config: &ExtractionConfig) -> i32 {
         }
     }
     
-    // Penalize for high link density
+    // Penalize for high link density (navigation-heavy content)
     let link_density = calculate_link_density(element);
     if link_density > *LINK_DENSITY_THRESHOLD {
-        score -= (link_density * 100.0) as i32;
+        score -= (link_density * 150.0) as i32; // Increased penalty for link-heavy content
+    }
+    
+    // Bonus for elements with common article structure (heading followed by paragraphs)
+    let heading_selector = Selector::parse("h1, h2, h3").unwrap();
+    if element.select(&heading_selector).next().is_some() && p_count >= 2 {
+        score += 30; // Bonus for having a heading and multiple paragraphs
     }
     
     score

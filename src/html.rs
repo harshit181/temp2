@@ -12,20 +12,43 @@ lazy_static! {
     /// Common elements that should be removed during cleaning
     static ref UNWANTED_ELEMENTS: Vec<&'static str> = vec![
         "script", "style", "noscript", "iframe", "footer", "nav", "aside",
-        "form", "button", "svg", "head", "header", "meta", "link", "comment"
+        "form", "button", "svg", "head", "header", "meta", "link", "comment",
+        "cite", "figcaption", "time", "small", "address"
     ];
 
     /// Common class names that indicate navigation, ads, or other non-content elements
     static ref UNWANTED_CLASSES: Vec<&'static str> = vec![
         "nav", "navbar", "navigation", "menu", "footer", "comment", "widget", 
         "sidebar", "advertisement", "ad", "advert", "popup", "banner", "social",
-        "sharing", "share", "related", "recommend", "promotion", "shopping"
+        "sharing", "share", "related", "recommend", "promotion", "shopping",
+        "subscribe", "subscription", "newsletter", "promo", "masthead", "aux",
+        "top-bar", "breadcrumb", "byline", "author-info", "metadata", "date-info",
+        "bottom-of-article", "bottom-wrapper", "download", "external", "toolbar",
+        "social-media", "pagination", "pager", "pages", "gallery", "attachment",
+        "viewer", "copyright", "disclaimer", "tags", "tag-cloud", "topics", "topic-list",
+        "category", "categories", "cat-item", "author", "dateline", "timestamp", "time-info",
+        "published", "pub-date", "publication-date", "post-meta", "article-meta", "article-header",
+        "article-footer", "article-byline", "article-details", "story-meta", "story-header",
+        "headline", "subheadline", "summary", "kicker", "deck", "credit", "source", "caption",
+        "title-info", "read-more", "more-link", "also-read", "also-see", "see-also", "recommended",
+        "recommendations", "popularity", "most-read", "most-shared", "trending", "hot"
     ];
 
     /// Common ID names that indicate navigation, ads, or other non-content elements
     static ref UNWANTED_IDS: Vec<&'static str> = vec![
         "nav", "navbar", "navigation", "menu", "footer", "comments", "sidebar",
-        "advertisement", "related", "recommend", "sidebar", "social", "sharing"
+        "advertisement", "related", "recommend", "social", "sharing",
+        "subscribe", "subscription", "newsletter", "promo", "masthead", 
+        "top-bar", "breadcrumb", "byline", "author-info", "metadata", "date-info",
+        "bottom-of-article", "bottom-wrapper", "download", "external", "toolbar",
+        "social-media", "pagination", "pager", "pages", "gallery", "attachment",
+        "viewer", "copyright", "disclaimer", "tags", "tag-cloud", "topics", "topic-list",
+        "category", "categories", "author", "dateline", "timestamp", "time-info",
+        "published", "pub-date", "publication-date", "post-meta", "article-meta", "article-header",
+        "article-footer", "article-byline", "article-details", "story-meta", "story-header",
+        "headline", "subheadline", "summary", "kicker", "deck", "credit", "source", "caption",
+        "title-info", "read-more", "more-link", "also-read", "also-see", "see-also", "recommended",
+        "recommendations", "popularity", "most-read", "most-shared", "trending", "hot"
     ];
 
     /// Regex to match multiple spaces
@@ -66,17 +89,148 @@ pub fn clean_html(document: &Html, _config: &ExtractionConfig) -> Result<Html, T
 
 /// Get the text content of a node, preserving some formatting
 pub fn get_text_content(element: &ElementRef, config: &ExtractionConfig) -> String {
-    let mut text = String::new();
+    // Skip extraction for elements with unwanted classes or IDs
+    if has_class_hint(element, &UNWANTED_CLASSES) || has_id_hint(element, &UNWANTED_IDS) {
+        return String::new();
+    }
     
-    // Extract text directly
-    text.push_str(&element.text().collect::<Vec<_>>().join(" "));
+    // Process child nodes instead of getting text directly to have more control
+    let mut paragraphs = Vec::new();
+    let p_selector = Selector::parse("p").unwrap();
+    let mut skip_rest = false;  // Flag to skip paragraphs after encountering boilerplate markers
+    
+    for p in element.select(&p_selector) {
+        // Skip paragraphs with unwanted classes/IDs
+        if has_class_hint(&p, &UNWANTED_CLASSES) || has_id_hint(&p, &UNWANTED_IDS) {
+            continue;
+        }
+        
+        // Skip very short paragraphs (likely metadata or UI elements)
+        let p_text = p.text().collect::<String>();
+        
+        // Check for boilerplate markers that indicate we should stop extracting
+        // These are common phrases that mark the end of the main content in news articles
+        if p_text.contains("Catch all the") || 
+           p_text.contains("Download") || 
+           p_text.contains("Follow us") || 
+           p_text.contains("First Published") || 
+           p_text.contains("Read more about") || 
+           p_text.contains("More on this topic") || 
+           p_text.contains("Related articles") || 
+           p_text.contains("Tags:") || 
+           p_text.contains("Copyright") {
+            skip_rest = true;
+            continue;
+        }
+        
+        // Skip all remaining paragraphs once we've hit a boilerplate marker
+        if skip_rest {
+            continue;
+        }
+        
+        // Skip paragraphs that look like metadata
+        if p_text.len() < 30 {
+            if p_text.contains("Published") || 
+               p_text.contains("Updated") || 
+               p_text.contains("By ") || 
+               p_text.contains("Written by") || 
+               p_text.contains("Posted") || 
+               p_text.contains("Share") || 
+               p_text.contains("Read") || 
+               p_text.contains("Follow") || 
+               p_text.contains("Subscribe") || 
+               p_text.contains("Also Read") || 
+               p_text.contains("ALSO READ") || 
+               p_text.contains("More Less") || 
+               p_text.starts_with("Watch:") || 
+               p_text.contains("Business News") || 
+               p_text.contains("Latest News") {
+                continue;
+            }
+        }
+        
+        // Exclude paragraphs that are likely to be links to other articles (common pattern)
+        if p_text.starts_with("Also Read |") || 
+           p_text.starts_with("Read: ") || 
+           p_text.starts_with("Watch: ") || 
+           p_text.starts_with("See also: ") {
+            continue;
+        }
+        
+        // Include the paragraph text
+        paragraphs.push(p_text);
+    }
+    
+    // Initialize the text variable based on the content we found
+    let mut text = if !paragraphs.is_empty() {
+        // If we extracted paragraphs successfully, use those
+        paragraphs.join("\n\n")
+    } else {
+        // Otherwise fall back to extracting all text
+        // But filter out known metadata patterns first
+        
+        // Get all text nodes
+        let mut all_text = element.text().collect::<Vec<_>>();
+        
+        // Filter out common metadata patterns
+        all_text.retain(|&t| {
+            let trimmed = t.trim();
+            
+            // Skip these common patterns that indicate metadata, not content
+            !(trimmed.is_empty() || 
+              trimmed.starts_with("Published") || 
+              trimmed.starts_with("Updated") || 
+              trimmed.starts_with("Written by") || 
+              trimmed.starts_with("By ") || 
+              trimmed.contains("©") || 
+              trimmed.contains("All rights reserved") || 
+              trimmed.starts_with("Share") || 
+              trimmed.starts_with("Posted") ||
+              trimmed == "Read More" || 
+              trimmed == "Also Read" || 
+              trimmed.starts_with("Follow us"))
+        });
+        
+        all_text.join(" ")
+    };
     
     // Process specific elements
     if config.include_links {
         let link_selector = Selector::parse("a").unwrap();
         for link in element.select(&link_selector) {
+            // Skip navigation/sharing links
+            if has_class_hint(&link, &["nav", "menu", "social", "share", "tag", "author", "byline", "timestamp"]) {
+                continue;
+            }
+            
+            // Skip links in news articles that typically point to other articles
             if let Some(href) = link.value().attr("href") {
-                text.push_str(&format!(" ({}) ", href));
+                // Skip links to common news site patterns or social media
+                if href.contains("/tag/") || 
+                   href.contains("/tags/") ||
+                   href.contains("/topic/") || 
+                   href.contains("/topics/") ||
+                   href.contains("/author/") || 
+                   href.contains("/authors/") ||
+                   href.contains("/category/") || 
+                   href.contains("/categories/") ||
+                   href.contains("facebook.com") || 
+                   href.contains("twitter.com") || 
+                   href.contains("linkedin.com") || 
+                   href.contains("instagram.com") || 
+                   href.contains("youtube.com") || 
+                   href.contains("mailto:") {
+                    continue;
+                }
+                
+                // Only include links that have meaningful text
+                let link_text = link.text().collect::<String>();
+                if !link_text.is_empty() && link_text.len() > 3 && 
+                   !link_text.contains("Read more") && 
+                   !link_text.contains("More") && 
+                   !link_text.contains("Also") {
+                    text.push_str(&format!(" ({}) ", href));
+                }
             }
         }
     }
@@ -84,6 +238,11 @@ pub fn get_text_content(element: &ElementRef, config: &ExtractionConfig) -> Stri
     if config.include_images {
         let img_selector = Selector::parse("img").unwrap();
         for img in element.select(&img_selector) {
+            // Skip social/advertising/icon images
+            if has_class_hint(&img, &["icon", "logo", "social", "avatar", "ad"]) {
+                continue;
+            }
+            
             let alt = img.value().attr("alt").unwrap_or("");
             let src = img.value().attr("src").unwrap_or("");
             
@@ -94,6 +253,40 @@ pub fn get_text_content(element: &ElementRef, config: &ExtractionConfig) -> Stri
             }
         }
     }
+    
+    // Remove commonly found boilerplate phrases in news articles
+    let text = text.replace("Also Read", "")
+                  .replace("Read More", "")
+                  .replace("ALSO READ:", "")
+                  .replace("Catch all the", "")
+                  .replace("Download The", "")
+                  .replace("First Published :", "")
+                  .replace("Published :", "")
+                  .replace("Published on", "")
+                  .replace("Last Updated :", "");
+    
+    // Remove URL references that may have slipped through
+    let url_regex = Regex::new(r"https?://\S+").unwrap();
+    let text = url_regex.replace_all(&text, "").to_string();
+    
+    // Remove relative URL paths that may be in parentheses
+    let path_regex = Regex::new(r"\(\s*/[^\)]*\)").unwrap();
+    let text = path_regex.replace_all(&text, "").to_string();
+    
+    // Remove empty parentheses that might be left after URL removal
+    let empty_parentheses_regex = Regex::new(r"\(\s*\)").unwrap();
+    let text = empty_parentheses_regex.replace_all(&text, "").to_string();
+    
+    // Remove isolated single parentheses characters
+    let text = text.replace(" ( ", " ").replace(" ) ", " ");
+    
+    // Remove common ending phrases in news articles
+    let text = text.replace("Business News", "")
+                  .replace("Economy news", "")
+                  .replace("Breaking News Events", "")
+                  .replace("Latest News Updates", "")
+                  .replace("Daily Market Updates", "")
+                  .replace("More Less", "");
     
     // Normalize spaces
     let text = MULTIPLE_SPACES_RE.replace_all(&text, " ").to_string();
