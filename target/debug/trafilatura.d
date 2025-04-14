@@ -1,0 +1,1 @@
+/home/runner/workspace/target/debug/trafilatura: /home/runner/workspace/src/cli.rs /home/runner/workspace/src/extractors.rs /home/runner/workspace/src/html.rs /home/runner/workspace/src/lib.rs /home/runner/workspace/src/main.rs /home/runner/workspace/src/metadata.rs /home/runner/workspace/src/readability.rs /home/runner/workspace/src/utils.rs /home/runner/workspace/src/xpath.rs

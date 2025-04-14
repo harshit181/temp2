@@ -1,0 +1,123 @@
+modules = ["rust", "python-3.11"]
+
+[nix]
+channel = "stable-24_05"
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Rust Trafilatura"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "cargo_build_test"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Rust Trafilatura URL"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Rust Trafilatura JSON"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Rust Trafilatura XML"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Rust Trafilatura Other Site"
+
+[[workflows.workflow]]
+name = "Rust Trafilatura"
+author = "agent"
+
+[workflows.workflow.metadata]
+agentRequireRestartOnSave = false
+
+[[workflows.workflow.tasks]]
+task = "packager.installForAll"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cargo run -- wiki-sanjiv.html"
+
+[[workflows.workflow]]
+name = "cargo_build_test"
+author = "agent"
+
+[workflows.workflow.metadata]
+agentRequireRestartOnSave = false
+
+[[workflows.workflow.tasks]]
+task = "packager.installForAll"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cargo build && cargo run -- --help"
+
+[[workflows.workflow]]
+name = "Rust Trafilatura URL"
+author = "agent"
+
+[workflows.workflow.metadata]
+agentRequireRestartOnSave = false
+
+[[workflows.workflow.tasks]]
+task = "packager.installForAll"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cargo run -- https://en.wikipedia.org/wiki/Sanjiv_Goenka"
+
+[[workflows.workflow]]
+name = "Rust Trafilatura JSON"
+author = "agent"
+
+[workflows.workflow.metadata]
+agentRequireRestartOnSave = false
+
+[[workflows.workflow.tasks]]
+task = "packager.installForAll"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cargo run -- https://en.wikipedia.org/wiki/Sanjiv_Goenka --format json"
+
+[[workflows.workflow]]
+name = "Rust Trafilatura XML"
+author = "agent"
+
+[workflows.workflow.metadata]
+agentRequireRestartOnSave = false
+
+[[workflows.workflow.tasks]]
+task = "packager.installForAll"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cargo run -- https://en.wikipedia.org/wiki/Sanjiv_Goenka --format xml"
+
+[[workflows.workflow]]
+name = "Rust Trafilatura Other Site"
+author = "agent"
+
+[workflows.workflow.metadata]
+agentRequireRestartOnSave = false
+
+[[workflows.workflow.tasks]]
+task = "packager.installForAll"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cargo run -- https://en.wikipedia.org/wiki/Coca-Cola"
+
+[deployment]
+run = ["sh", "-c", "cargo run -- wiki-sanjiv.html"]
