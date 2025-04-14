@@ -33,8 +33,60 @@ pub struct XPaths {
 
 /// Default CSS selector expressions for content extraction
 pub const DEFAULT_XPATHS: XPaths = XPaths {
-    main_content: "main, article, div.article, div.content, div.document, div#content, div#article",
-    paragraphs: "p",
+    // Complex selectors for main content, ported from Python trafilatura's BODY_XPATH
+    main_content: concat!(
+        // Common article containers
+        "article, main, ",
+        
+        // Post and entry classes
+        "div.post, div.entry, ",
+        "div[class*='post-text'], div[class*='post_text'], ",
+        "div[class*='post-body'], div[class*='post-entry'], div[class*='postentry'], ",
+        "div[class*='post-content'], div[class*='post_content'], ",
+        "div[class*='postcontent'], div[class*='postContent'], div[class*='post_inner_wrapper'], ",
+        
+        // Article text classes
+        "div[class*='article-text'], div[class*='articletext'], div[class*='articleText'], ",
+        
+        // Content containers
+        "div[id*='entry-content'], ",
+        "div[class*='entry-content'], div[id*='article-content'], ",
+        "div[class*='article-content'], div[id*='article__content'], ",
+        "div[class*='article__content'], div[id*='article-body'], ",
+        "div[class*='article-body'], div[id*='article__body'], ",
+        "div[class*='article__body'], div[itemprop='articleBody'], ",
+        "div[id*='articlebody' i], div[class*='articlebody' i], ",  // case insensitive
+        "div#articleContent, div[class*='ArticleContent'], ",
+        "div[class*='page-content'], div[class*='text-content'], ",
+        "div[id*='body-text'], div[class*='body-text'], ",
+        "div[class*='article__container'], div[id*='art-content'], div[class*='art-content'], ",
+        
+        // Secondary content selectors
+        "div[class*='post-bodycopy'], ",
+        "div[class*='storycontent'], div[class*='story-content'], ",
+        "div.postarea, div.art-postcontent, ",
+        "div[class*='theme-content'], div[class*='blog-content'], ",
+        "div[class*='section-content'], div[class*='single-content'], ",
+        "div[class*='single-post'], ",
+        "div[class*='main-column'], div[class*='wpb_text_column'], ",
+        "div[id^='primary'], div[class^='article '], div.text, ",
+        "div#article, div.cell, div#story, div.story, ",
+        "div[class*='story-body'], div[id*='story-body'], div[class*='field-body'], ",
+        "div[class*='fulltext' i], ",  // case insensitive
+        "div[role='article'], ",
+        
+        // Content main selectors
+        "div[id*='content-main'], div[class*='content-main'], div[class*='content_main'], ",
+        "div[id*='content-body'], div[class*='content-body'], div[id*='contentBody'], ",
+        "div[class*='content__body'], div[id*='main-content' i], div[class*='main-content' i], ",  // case insensitive
+        "div[class*='page-content' i], ", // case insensitive
+        "div#content, div.content, ",
+        
+        // Main selectors
+        "section[class^='main'], section[id^='main'], section[role^='main'], ",
+        "div[class^='main'], div[id^='main'], div[role^='main']"
+    ),
+    paragraphs: "p, div[class*='paragraph'], div[class*='text-block'], div[class*='post-block'], div[class*='entry-block'], div.post-text, div.text, div[class*='article-text'], section[class*='paragraph']",
     headings: "h1, h2, h3, h4, h5, h6",
     lists: "ul, ol, dl",
     list_items: "li, dt, dd",
@@ -46,15 +98,15 @@ pub const DEFAULT_XPATHS: XPaths = XPaths {
 
 /// Wikipedia-specific CSS selector expressions for content extraction
 pub const WIKI_XPATHS: XPaths = XPaths {
-    main_content: "div#content, div#mw-content-text",
-    paragraphs: "div#mw-content-text p",
-    headings: "div#mw-content-text h1, div#mw-content-text h2, div#mw-content-text h3, div#mw-content-text h4, div#mw-content-text h5, div#mw-content-text h6",
-    lists: "div#mw-content-text ul, div#mw-content-text ol",
-    list_items: "div#mw-content-text li",
-    tables: "div#mw-content-text table",
-    images: "div#mw-content-text img",
-    captions: "div#mw-content-text figcaption",
-    anchors: "div#mw-content-text a",
+    main_content: "div#content, div#bodyContent, div#mw-content-text, div.mw-parser-output",
+    paragraphs: "div#mw-content-text p, div.mw-parser-output p, .mw-parser-output .mw-empty-elt",
+    headings: "div#mw-content-text h1, div#mw-content-text h2, div#mw-content-text h3, div#mw-content-text h4, div#mw-content-text h5, div#mw-content-text h6, div.mw-parser-output h1, div.mw-parser-output h2, div.mw-parser-output h3, div.mw-parser-output h4, div.mw-parser-output h5, div.mw-parser-output h6",
+    lists: "div#mw-content-text ul, div#mw-content-text ol, div.mw-parser-output ul, div.mw-parser-output ol",
+    list_items: "div#mw-content-text li, div.mw-parser-output li",
+    tables: "div#mw-content-text table, div.mw-parser-output table",
+    images: "div#mw-content-text img, div.mw-parser-output img",
+    captions: "div#mw-content-text figcaption, div.mw-parser-output figcaption",
+    anchors: "div#mw-content-text a, div.mw-parser-output a",
 };
 
 /// Helper function to create a Selector from a CSS selector string
@@ -64,7 +116,7 @@ pub fn create_selector(selector: &str) -> Result<Selector, TrafilaturaError> {
 }
 
 /// Text content of section headers to skip in Wikipedia articles
-pub const WIKI_SKIP_SECTION_TITLES: [&str; 8] = [
+pub const WIKI_SKIP_SECTION_TITLES: [&str; 13] = [
     "References",
     "External links",
     "See also",
@@ -73,6 +125,11 @@ pub const WIKI_SKIP_SECTION_TITLES: [&str; 8] = [
     "Bibliography",
     "Sources",
     "Citations",
+    "Footnotes",
+    "Literature",
+    "Literatur", // German Wikipedia
+    "Weblinks",  // German Wikipedia
+    "Enlaces externos", // Spanish Wikipedia
 ];
 
 /// Names of elements to exclude from extraction
