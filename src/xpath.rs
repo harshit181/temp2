@@ -1,15 +1,15 @@
 //! CSS selector extraction module for Trafilatura Rust port.
-//! This module uses CSS selectors instead of XPath expressions for better compatibility with kuchiki.
+//! This module uses CSS selectors for HTML element selection.
 //! The module name remains xpath.rs for compatibility with the original design.
 
-use kuchiki::{ElementData, NodeDataRef, NodeRef, parse_html};
-use kuchiki::traits::*;
 use log::debug;
+use scraper::{Html, Selector, ElementRef};
+use regex::Regex;
 
 use crate::ExtractionConfig;
 use crate::TrafilaturaError;
 
-/// CSS selectors used for content extraction (used instead of XPath for better compatibility)
+/// CSS selectors used for content extraction
 pub struct XPaths {
     /// CSS selector for the main content area
     pub main_content: &'static str,
@@ -57,14 +57,22 @@ pub const WIKI_XPATHS: XPaths = XPaths {
     anchors: "div#mw-content-text a",
 };
 
-/// CSS selectors to identify sections to skip in Wikipedia articles
-pub const WIKI_SKIP_SECTIONS: [&str; 6] = [
-    "div#mw-content-text h2:contains('References')",
-    "div#mw-content-text h2:contains('External links')",
-    "div#mw-content-text h2:contains('See also')",
-    "div#mw-content-text h2:contains('Further reading')",
-    "div#mw-content-text h2:contains('Notes')",
-    "div#mw-content-text h2:contains('Bibliography')",
+/// Helper function to create a Selector from a CSS selector string
+pub fn create_selector(selector: &str) -> Result<Selector, TrafilaturaError> {
+    Selector::parse(selector)
+        .map_err(|e| TrafilaturaError::SelectorError(format!("Invalid selector: {} - {:?}", selector, e)))
+}
+
+/// Text content of section headers to skip in Wikipedia articles
+pub const WIKI_SKIP_SECTION_TITLES: [&str; 8] = [
+    "References",
+    "External links",
+    "See also",
+    "Further reading",
+    "Notes",
+    "Bibliography",
+    "Sources",
+    "Citations",
 ];
 
 /// Names of elements to exclude from extraction
@@ -95,7 +103,7 @@ pub const EXCLUDE_IDS: [&str; 30] = [
 /// Extract content using CSS selector expressions (simplified XPath-like approach)
 pub fn extract_with_xpath(html_content: &str, config: &ExtractionConfig) -> Result<String, TrafilaturaError> {
     // Parse the HTML document
-    let document = parse_html().one(html_content);
+    let document = Html::parse_document(html_content);
     
     // Determine if this is a Wikipedia page
     let is_wiki = is_wikipedia_page(&document);
@@ -105,15 +113,15 @@ pub fn extract_with_xpath(html_content: &str, config: &ExtractionConfig) -> Resu
     
     // Find the main content
     let mut content = String::new();
-    let mut elements = document.select(xpaths.main_content)
-        .map_err(|_| TrafilaturaError::ExtractionError("CSS selection error for main content".to_string()))?
-        .collect::<Vec<_>>();
+    
+    // Create the selector for main content
+    let main_content_selector = create_selector(xpaths.main_content)?;
+    let mut elements = document.select(&main_content_selector).collect::<Vec<_>>();
     
     // If we didn't find a main content area, try with a broader approach
     if elements.is_empty() {
-        elements = document.select("body")
-            .map_err(|_| TrafilaturaError::ExtractionError("CSS selection error for body".to_string()))?
-            .collect::<Vec<_>>();
+        let body_selector = create_selector("body")?;
+        elements = document.select(&body_selector).collect::<Vec<_>>();
     }
     
     if elements.is_empty() {
@@ -123,153 +131,125 @@ pub fn extract_with_xpath(html_content: &str, config: &ExtractionConfig) -> Resu
     // Process the main content
     let main_element = &elements[0];
     
-    // For Wikipedia, we'll track if we're in a section that should be skipped
-    let mut in_skip_section;
-    
     // Extract headings and content
-    if let Ok(elements) = main_element.as_node().select(xpaths.headings) {
-        for element in elements {
-            let text = get_element_text(&element).unwrap_or_default();
-            let is_skip_section = is_wiki && should_skip_section(&text);
-            
-            // If it's not a section to skip and it's a heading
-            if !is_skip_section && is_heading(&element.as_node()) {
-                if !text.trim().is_empty() {
-                    content.push_str(&text);
-                    content.push_str("\n\n");
-                }
+    let headings_selector = create_selector(xpaths.headings)?;
+    for element in main_element.select(&headings_selector) {
+        let text = element.text().collect::<String>();
+        let is_skip_section = is_wiki && should_skip_section(&text);
+        
+        // If it's not a section to skip
+        if !is_skip_section && is_heading(element) {
+            if !text.trim().is_empty() {
+                content.push_str(&text);
+                content.push_str("\n\n");
             }
         }
     }
-    
-    // Reset the flag
-    in_skip_section = false;
     
     // Extract paragraphs, checking if we're in a section to skip
-    if let Ok(elements) = main_element.as_node().select(xpaths.paragraphs) {
-        for element in elements {
-            // Check if preceding heading is in skip section
-            if is_wiki {
-                let prev = find_preceding_heading(&element);
-                if let Some(heading) = prev {
-                    let heading_text = heading.text_contents();
-                    in_skip_section = should_skip_section(&heading_text);
-                }
-            }
-            
-            if in_skip_section || should_exclude(&element) {
-                continue;
-            }
-            
-            if let Some(text) = get_element_text(&element) {
-                let trimmed = text.trim();
-                if !trimmed.is_empty() && trimmed.len() > 10 {  // Exclude very short paragraphs
-                    content.push_str(trimmed);
-                    content.push_str("\n\n");
-                }
+    let paragraphs_selector = create_selector(xpaths.paragraphs)?;
+    for element in main_element.select(&paragraphs_selector) {
+        // Check if preceding heading is in skip section
+        let mut should_skip = false;
+        if is_wiki {
+            if let Some(heading_text) = find_preceding_heading_text(&document, &element) {
+                should_skip = should_skip_section(&heading_text);
             }
         }
+        
+        if should_skip || should_exclude(&element) {
+            continue;
+        }
+        
+        let text = element.text().collect::<String>();
+        let trimmed = text.trim();
+        if !trimmed.is_empty() && trimmed.len() > 10 {  // Exclude very short paragraphs
+            content.push_str(trimmed);
+            content.push_str("\n\n");
+        }
     }
-    
-    // Reset the flag
-    in_skip_section = false;
     
     // Extract lists
     if config.include_tables {
-        if let Ok(elements) = main_element.as_node().select(xpaths.lists) {
-            for element in elements {
-                // Check if preceding heading is in skip section
-                if is_wiki {
-                    let prev = find_preceding_heading(&element);
-                    if let Some(heading) = prev {
-                        let heading_text = heading.text_contents();
-                        in_skip_section = should_skip_section(&heading_text);
-                    }
+        let lists_selector = create_selector(xpaths.lists)?;
+        for element in main_element.select(&lists_selector) {
+            // Check if preceding heading is in skip section
+            let mut should_skip = false;
+            if is_wiki {
+                if let Some(heading_text) = find_preceding_heading_text(&document, &element) {
+                    should_skip = should_skip_section(&heading_text);
                 }
-                
-                if in_skip_section || should_exclude(&element) {
+            }
+            
+            if should_skip || should_exclude(&element) {
+                continue;
+            }
+            
+            // Extract list items
+            let list_items_selector = create_selector(xpaths.list_items)?;
+            for item in element.select(&list_items_selector) {
+                if should_exclude(&item) {
                     continue;
                 }
                 
-                // Extract list items
-                if let Ok(list_items) = element.as_node().select(xpaths.list_items) {
-                    for item in list_items {
-                        if should_exclude(&item) {
-                            continue;
-                        }
-                        
-                        if let Some(text) = get_element_text(&item) {
-                            let trimmed = text.trim();
-                            if !trimmed.is_empty() {
-                                content.push_str("• ");
-                                content.push_str(trimmed);
-                                content.push_str("\n");
-                            }
-                        }
-                    }
+                let text = item.text().collect::<String>();
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    content.push_str("• ");
+                    content.push_str(trimmed);
                     content.push_str("\n");
                 }
             }
+            content.push_str("\n");
         }
     }
     
-    // Reset the flag
-    in_skip_section = false;
-    
     // Extract tables
     if config.include_tables {
-        if let Ok(elements) = main_element.as_node().select(xpaths.tables) {
-            for element in elements {
-                // Check if preceding heading is in skip section
-                if is_wiki {
-                    let prev = find_preceding_heading(&element);
-                    if let Some(heading) = prev {
-                        let heading_text = heading.text_contents();
-                        in_skip_section = should_skip_section(&heading_text);
-                    }
+        let tables_selector = create_selector(xpaths.tables)?;
+        for element in main_element.select(&tables_selector) {
+            // Check if preceding heading is in skip section
+            let mut should_skip = false;
+            if is_wiki {
+                if let Some(heading_text) = find_preceding_heading_text(&document, &element) {
+                    should_skip = should_skip_section(&heading_text);
                 }
-                
-                if in_skip_section || should_exclude(&element) {
-                    continue;
-                }
-                
-                // Simple extraction of table text
-                if let Some(text) = get_element_text(&element) {
-                    let trimmed = text.trim();
-                    if !trimmed.is_empty() {
-                        content.push_str("[Table: ");
-                        content.push_str(trimmed);
-                        content.push_str("]\n\n");
-                    }
-                }
+            }
+            
+            if should_skip || should_exclude(&element) {
+                continue;
+            }
+            
+            // Simple extraction of table text
+            let text = element.text().collect::<String>();
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                content.push_str("[Table: ");
+                content.push_str(trimmed);
+                content.push_str("]\n\n");
             }
         }
     }
     
     // Extract images
     if config.include_images {
-        if let Ok(elements) = main_element.as_node().select(xpaths.images) {
-            for element in elements {
-                if should_exclude(&element) {
-                    continue;
+        let images_selector = create_selector(xpaths.images)?;
+        for element in main_element.select(&images_selector) {
+            if should_exclude(&element) {
+                continue;
+            }
+            
+            let alt = element.value().attr("alt").unwrap_or("");
+            let src = element.value().attr("src").unwrap_or("");
+            
+            if !alt.is_empty() || !src.is_empty() {
+                content.push_str("[Image: ");
+                if !alt.is_empty() {
+                    content.push_str(alt);
+                } else {
+                    content.push_str(src);
                 }
-                
-                let node = element.as_node();
-                if let Some(element_data) = node.as_element() {
-                    let attrs = element_data.attributes.borrow();
-                    let alt = attrs.get("alt").unwrap_or("");
-                    let src = attrs.get("src").unwrap_or("");
-                    
-                    if !alt.is_empty() || !src.is_empty() {
-                        content.push_str("[Image: ");
-                        if !alt.is_empty() {
-                            content.push_str(alt);
-                        } else {
-                            content.push_str(src);
-                        }
-                        content.push_str("]\n\n");
-                    }
-                }
+                content.push_str("]\n\n");
             }
         }
     }
@@ -278,95 +258,85 @@ pub fn extract_with_xpath(html_content: &str, config: &ExtractionConfig) -> Resu
     let mut cleaned_content = content.trim().to_string();
     
     // Replace consecutive newlines with just two
-    let multiple_newlines_re = regex::Regex::new(r"\n{3,}").unwrap();
+    let multiple_newlines_re = Regex::new(r"\n{3,}").unwrap();
     cleaned_content = multiple_newlines_re.replace_all(&cleaned_content, "\n\n").to_string();
     
     Ok(cleaned_content)
 }
 
-/// Find the preceding heading element
-fn find_preceding_heading(element: &NodeDataRef<ElementData>) -> Option<NodeRef> {
-    let node = element.as_node();
-    let mut current = node.clone();
+/// Find the text of the preceding heading of an element
+fn find_preceding_heading_text(document: &Html, element: &ElementRef) -> Option<String> {
+    // Try to find headings by traversing the DOM upwards
+    let h_selector = Selector::parse("h1, h2, h3, h4, h5, h6").unwrap();
     
-    // Check previous siblings first
-    loop {
-        if let Some(prev) = current.previous_sibling() {
-            if is_heading(&prev) {
-                return Some(prev);
+    // Find parent section or article
+    let _section_selector = Selector::parse("section, article, div").unwrap();
+    let mut current = element.clone();
+    
+    // First check if we can find a heading within the same parent
+    while let Some(parent_ref) = current.parent().and_then(ElementRef::wrap) {
+        // Check direct children of parent for headings that come before our element
+        for heading in parent_ref.select(&h_selector) {
+            // Check if heading is before our element in document order
+            if is_before(document, &heading, element) {
+                return Some(heading.text().collect());
             }
-            current = prev;
-        } else {
-            break;
         }
-    }
-    
-    // If no heading found among siblings, check parent's previous siblings
-    if let Some(parent) = node.parent() {
-        let mut current = parent.clone();
-        loop {
-            if let Some(prev) = current.previous_sibling() {
-                if is_heading(&prev) {
-                    return Some(prev);
-                }
-                
-                // Check if any descendants are headings
-                if let Ok(headings) = prev.select("h1,h2,h3,h4,h5,h6") {
-                    if let Some(last_heading) = headings.last() {
-                        return Some(last_heading.as_node().clone());
-                    }
-                }
-                
-                current = prev;
-            } else {
-                break;
-            }
+        
+        // Move up to parent
+        current = parent_ref;
+        
+        // If we've reached a section or article, stop
+        if current.value().name.local.eq_str_ignore_ascii_case("section") || 
+           current.value().name.local.eq_str_ignore_ascii_case("article") {
+            break;
         }
     }
     
     None
 }
 
+/// Check if element a is before element b in document order
+fn is_before(document: &Html, a: &ElementRef, b: &ElementRef) -> bool {
+    // Simplistic approach: compare the source positions
+    // This is a heuristic that works in most cases but not all
+    let all_elements: Vec<_> = document.tree.nodes().collect();
+    let a_pos = all_elements.iter().position(|n| n.id() == a.id());
+    let b_pos = all_elements.iter().position(|n| n.id() == b.id());
+    
+    match (a_pos, b_pos) {
+        (Some(a_idx), Some(b_idx)) => a_idx < b_idx,
+        _ => false,
+    }
+}
+
 /// Check if a section should be skipped based on heading text
 fn should_skip_section(heading_text: &str) -> bool {
     let heading_lower = heading_text.to_lowercase();
-    heading_lower.contains("references") ||
-    heading_lower.contains("external links") ||
-    heading_lower.contains("see also") ||
-    heading_lower.contains("further reading") ||
-    heading_lower.contains("notes") ||
-    heading_lower.contains("bibliography") ||
-    heading_lower.contains("sources") ||
-    heading_lower.contains("citations")
+    
+    WIKI_SKIP_SECTION_TITLES.iter().any(|&title| {
+        heading_lower.contains(&title.to_lowercase())
+    })
 }
 
 /// Check if the page is a Wikipedia page
-fn is_wikipedia_page(document: &NodeRef) -> bool {
-    if let Ok(meta_tags) = document.select("meta[property='og:site_name']") {
-        for meta in meta_tags {
-            let node = meta.as_node();
-            if let Some(element_data) = node.as_element() {
-                let attrs = element_data.attributes.borrow();
-                if let Some(content) = attrs.get("content") {
-                    if content.contains("Wikipedia") {
-                        return true;
-                    }
-                }
+fn is_wikipedia_page(document: &Html) -> bool {
+    // Check meta tags for Wikipedia
+    let meta_selector = Selector::parse("meta[property='og:site_name']").unwrap();
+    for meta in document.select(&meta_selector) {
+        if let Some(content) = meta.value().attr("content") {
+            if content.contains("Wikipedia") {
+                return true;
             }
         }
     }
     
     // Check domain in canonical link
-    if let Ok(links) = document.select("link[rel='canonical']") {
-        for link in links {
-            let node = link.as_node();
-            if let Some(element_data) = node.as_element() {
-                let attrs = element_data.attributes.borrow();
-                if let Some(href) = attrs.get("href") {
-                    if href.contains("wikipedia.org") {
-                        return true;
-                    }
-                }
+    let link_selector = Selector::parse("link[rel='canonical']").unwrap();
+    for link in document.select(&link_selector) {
+        if let Some(href) = link.value().attr("href") {
+            if href.contains("wikipedia.org") {
+                return true;
             }
         }
     }
@@ -374,73 +344,64 @@ fn is_wikipedia_page(document: &NodeRef) -> bool {
     false
 }
 
-/// Check if a node is a heading element
-fn is_heading(node: &NodeRef) -> bool {
-    if let Some(element_ref) = node.as_element() {
-        let name = element_ref.name.local.to_string();
-        return matches!(name.as_str(), "h1" | "h2" | "h3" | "h4" | "h5" | "h6");
-    }
-    false
+/// Check if an element is a heading
+fn is_heading(element: ElementRef) -> bool {
+    let name = element.value().name.local.to_lowercase();
+    matches!(name.as_str(), "h1" | "h2" | "h3" | "h4" | "h5" | "h6")
 }
 
 /// Check if an element should be excluded based on its tag, class, or ID
-fn should_exclude(element: &NodeDataRef<ElementData>) -> bool {
-    let node = element.as_node();
+fn should_exclude(element: &ElementRef) -> bool {
+    // Check element itself
+    let el = element.value();
     
-    // Check parent for exclusion first
-    if let Some(parent) = node.parent() {
-        if let Some(parent_element) = parent.as_element() {
-            // Check if parent is in exclude list
-            let name = parent_element.name.local.to_string();
-            if EXCLUDE_ELEMENTS.contains(&name.as_str()) {
+    // Check tag name
+    let tag_name = el.name.local.to_lowercase();
+    if EXCLUDE_ELEMENTS.iter().any(|&tag| tag.eq_ignore_ascii_case(&tag_name)) {
+        return true;
+    }
+    
+    // Check classes
+    if let Some(class_attr) = el.attr("class") {
+        let classes: Vec<&str> = class_attr.split_whitespace().collect();
+        for class in classes {
+            if EXCLUDE_CLASSES.iter().any(|&excl| class.eq_ignore_ascii_case(excl)) {
                 return true;
-            }
-            
-            // Check parent classes and IDs
-            let attrs = parent_element.attributes.borrow();
-            
-            if let Some(class) = attrs.get("class") {
-                for exclude_class in EXCLUDE_CLASSES.iter() {
-                    if class.contains(exclude_class) {
-                        return true;
-                    }
-                }
-            }
-            
-            if let Some(id) = attrs.get("id") {
-                for exclude_id in EXCLUDE_IDS.iter() {
-                    if id.contains(exclude_id) {
-                        return true;
-                    }
-                }
             }
         }
     }
     
-    // Check the element itself
-    if let Some(element_data) = node.as_element() {
-        // Check if element is in exclude list
-        let name = element_data.name.local.to_string();
-        if EXCLUDE_ELEMENTS.contains(&name.as_str()) {
+    // Check id
+    if let Some(id) = el.attr("id") {
+        if EXCLUDE_IDS.iter().any(|&excl_id| id.eq_ignore_ascii_case(excl_id)) {
+            return true;
+        }
+    }
+    
+    // Check parent elements
+    if let Some(parent_ref) = element.parent().and_then(ElementRef::wrap) {
+        let parent = parent_ref.value();
+        
+        // Check parent tag
+        let parent_tag = parent.name.local.to_lowercase();
+        if EXCLUDE_ELEMENTS.iter().any(|&tag| tag.eq_ignore_ascii_case(&parent_tag)) {
             return true;
         }
         
-        // Check classes and IDs
-        let attrs = element_data.attributes.borrow();
-        
-        if let Some(class) = attrs.get("class") {
-            for exclude_class in EXCLUDE_CLASSES.iter() {
-                if class.contains(exclude_class) {
+        // Check parent classes
+        if let Some(parent_class) = parent.attr("class") {
+            let parent_classes: Vec<&str> = parent_class.split_whitespace().collect();
+            for class in parent_classes {
+                if EXCLUDE_CLASSES.iter().any(|&excl| class.eq_ignore_ascii_case(excl)) {
                     return true;
                 }
             }
         }
         
-        if let Some(id) = attrs.get("id") {
-            for exclude_id in EXCLUDE_IDS.iter() {
-                if id.contains(exclude_id) {
-                    return true;
-                }
+        // Check parent id
+        if let Some(parent_id) = parent.attr("id") {
+            if EXCLUDE_IDS.iter().any(|&excl_id| parent_id.eq_ignore_ascii_case(excl_id)) {
+                return true;
             }
         }
     }
@@ -448,14 +409,43 @@ fn should_exclude(element: &NodeDataRef<ElementData>) -> bool {
     false
 }
 
-/// Get the text content of an element
-fn get_element_text(element: &NodeDataRef<ElementData>) -> Option<String> {
-    let node = element.as_node();
-    let text = node.text_contents();
+#[cfg(test)]
+mod tests {
+    use super::*;
     
-    if text.trim().is_empty() {
-        None
-    } else {
-        Some(text)
+    #[test]
+    fn test_wikipedia_page_detection() {
+        // Test with a Wikipedia page
+        let html = r#"<!DOCTYPE html>
+        <html>
+        <head>
+            <meta property="og:site_name" content="Wikipedia" />
+        </head>
+        <body></body>
+        </html>"#;
+        
+        let document = Html::parse_document(html);
+        assert!(is_wikipedia_page(&document));
+        
+        // Test with a non-Wikipedia page
+        let html = r#"<!DOCTYPE html>
+        <html>
+        <head>
+            <meta property="og:site_name" content="Not Wikipedia" />
+        </head>
+        <body></body>
+        </html>"#;
+        
+        let document = Html::parse_document(html);
+        assert!(!is_wikipedia_page(&document));
+    }
+    
+    #[test]
+    fn test_should_skip_section() {
+        assert!(should_skip_section("References"));
+        assert!(should_skip_section("External links"));
+        assert!(should_skip_section("See also"));
+        assert!(!should_skip_section("Introduction"));
+        assert!(!should_skip_section("Main content"));
     }
 }

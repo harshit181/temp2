@@ -40,6 +40,9 @@ pub enum TrafilaturaError {
     
     #[error("JSON serialization error: {0}")]
     JsonError(#[from] serde_json::Error),
+    
+    #[error("CSS selector error: {0}")]
+    SelectorError(String),
 }
 
 /// Output format options for extracted content
